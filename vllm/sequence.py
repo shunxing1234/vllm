@@ -9,6 +9,7 @@ from vllm.sampling_params import SamplingParams
 
 class SequenceStatus(enum.Enum):
     """Status of a sequence."""
+
     WAITING = enum.auto()
     RUNNING = enum.auto()
     SWAPPED = enum.auto()
@@ -127,6 +128,22 @@ class Sequence:
         # Input + output tokens
         self.tokens: Optional[List[str]] = None
 
+        self.prompt_top_logprobs: Optional[List[Optional[Dict[int,
+                                                              float]]]] = None
+
+    @property
+    def cumulative_prompt_logprob(self) -> float:
+        return sum(x for x in self.prompt_logprobs if x is not None)  # pylint: disable=E1133
+
+    @property
+    def prompt_logprobs(self) -> Optional[List[Optional[float]]]:
+        if self.prompt_top_logprobs is None:
+            return None
+        return [
+            x[self.data.prompt_token_ids[i]] if x is not None else None
+            for i, x in enumerate(self.prompt_top_logprobs)
+        ]
+
     def _append_logical_block(self) -> None:
         block = LogicalTokenBlock(
             block_number=len(self.logical_token_blocks),
@@ -181,10 +198,12 @@ class Sequence:
     def get_cumulative_logprob(self) -> float:
         return self.data.cumulative_logprob
 
-    def get_beam_search_score(self,
-                              length_penalty: float = 0.0,
-                              seq_len: Optional[int] = None,
-                              eos_token_id: Optional[int] = None) -> float:
+    def get_beam_search_score(
+        self,
+        length_penalty: float = 0.0,
+        seq_len: Optional[int] = None,
+        eos_token_id: Optional[int] = None,
+    ) -> float:
         """Calculate the beam search score with length penalty.
 
         Adapted from
@@ -235,6 +254,27 @@ class SequenceGroup:
         self.seqs_dict = {seq.seq_id: seq for seq in seqs}
         self.sampling_params = sampling_params
         self.arrival_time = arrival_time
+
+    @property
+    def prompt_top_logprobs(
+            self) -> Optional[List[Optional[Dict[int, float]]]]:
+        # Randomly pick a seq since all of their prompts should be the same
+        seq = next(iter(self.seqs_dict.values()))
+        if (self.sampling_params.get_prompt_logprobs
+                and self.sampling_params.logprobs is not None):
+            return seq.prompt_top_logprobs
+        else:
+            return None
+
+    @property
+    def prompt_logprobs(self) -> Optional[List[float]]:
+        # Randomly pick a seq since all of their prompts should be the same
+        seq = next(iter(self.seqs_dict.values()))
+        if (self.sampling_params.get_prompt_logprobs
+                and self.sampling_params.logprobs is not None):
+            return seq.prompt_logprobs
+        else:
+            return None
 
     def get_max_num_running_seqs(self) -> int:
         """The maximum number of sequences running in parallel in the remaining
@@ -354,10 +394,13 @@ class SequenceOutputs:
         self.output_token = output_token
         self.logprobs = logprobs
 
+        self.prompt_top_logprobs: Optional[List[Optional[Dict[int,
+                                                              float]]]] = None
+
     def __repr__(self) -> str:
         return (f"SequenceOutputs(parent_seq_id={self.parent_seq_id}, "
-                f"output_token={self.output_token}), "
-                f"logprobs={self.logprobs}")
+                f"output_token={self.output_token}, "
+                f"logprobs={self.logprobs})")
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SequenceOutputs):

@@ -258,6 +258,11 @@ class LLMEngine:
         if prompt_token_ids is None:
             assert prompt is not None
             prompt_token_ids = self.tokenizer.encode(prompt)
+        if prompt is None:
+            # If only `prompt_token_ids` provided, this ensures
+            # the prompt string presented.
+            prompt = self.tokenizer.decode(prompt_token_ids,
+                                           skip_special_tokens=True)
 
         # Create the sequences.
         block_size = self.cache_config.block_size
@@ -356,6 +361,9 @@ class LLMEngine:
         }
         for sample in samples:
             parent_child_dict[sample.parent_seq_id].append(sample)
+            seq = seq_group.seqs_dict[sample.parent_seq_id]
+            if sample.prompt_top_logprobs is not None:
+                seq.prompt_top_logprobs = sample.prompt_top_logprobs
         # List of (child, parent)
         child_seqs: List[Tuple[Sequence, Sequence]] = []
 
@@ -650,6 +658,9 @@ class LLMEngine:
                 seq.output_text = seq.output_text[:-len(stop_str)]
                 seq.status = SequenceStatus.FINISHED_STOPPED
                 return
+        if seq.get_last_token_id() in sampling_params.stop_token_ids:
+            seq.status = SequenceStatus.FINISHED_STOPPED
+            return
 
         # Check if the sequence has reached max_model_len.
         if seq.get_len() > self.scheduler_config.max_model_len:

@@ -12,8 +12,8 @@ from vllm.model_executor.parallel_utils.parallel_state import (
     initialize_model_parallel)
 from vllm.sampling_params import SamplingParams
 from vllm.sequence import SamplerOutput, SequenceData, SequenceGroupMetadata
-from vllm.worker.cache_engine import CacheEngine
 from vllm.utils import get_gpu_memory
+from vllm.worker.cache_engine import CacheEngine
 
 
 class Worker:
@@ -149,6 +149,7 @@ class Worker:
         input_tokens: List[int] = []
         input_positions: List[int] = []
         slot_mapping: List[int] = []
+        get_prompt_logprobs: List[bool] = []
 
         # Add prompt tokens.
         prompt_lens: List[int] = []
@@ -186,6 +187,10 @@ class Worker:
                 block_offset = i % self.block_size
                 slot = block_number * self.block_size + block_offset
                 slot_mapping.append(slot)
+
+            # Whether to use get_prompt_logprobs for prompts.
+            get_prompt_logprobs.append(
+                seq_group_metadata.sampling_params.get_prompt_logprobs)
 
         # Add generation tokens.
         max_context_len = 0
@@ -228,15 +233,25 @@ class Worker:
         input_positions = _pad_to_alignment(input_positions, multiple_of=8)
 
         # Convert to tensors.
-        tokens_tensor = torch.cuda.LongTensor(input_tokens)
-        positions_tensor = torch.cuda.LongTensor(input_positions)
-        slot_mapping_tensor = torch.cuda.IntTensor(slot_mapping)
-        context_lens_tensor = torch.cuda.IntTensor(context_lens)
+        tokens_tensor = torch.tensor(input_tokens,
+                                     dtype=torch.long,
+                                     device="cuda")
+        positions_tensor = torch.tensor(input_positions,
+                                        dtype=torch.long,
+                                        device="cuda")
+        slot_mapping_tensor = torch.tensor(slot_mapping,
+                                           dtype=torch.int,
+                                           device="cuda")
+        context_lens_tensor = torch.tensor(context_lens,
+                                           dtype=torch.int,
+                                           device="cuda")
         padded_block_tables = [
             _pad_to_max(block_table, max_num_blocks_per_seq)
             for block_table in generation_block_tables
         ]
-        block_tables_tensor = torch.cuda.IntTensor(padded_block_tables)
+        block_tables_tensor = torch.tensor(padded_block_tables,
+                                           dtype=torch.int,
+                                           device="cuda")
 
         seq_data: Dict[int, SequenceData] = {}
         for seq_group_metadata in seq_group_metadata_list:
@@ -250,6 +265,7 @@ class Worker:
             context_lens=context_lens_tensor,
             max_context_len=max_context_len,
             block_tables=block_tables_tensor,
+            get_prompt_logprobs=get_prompt_logprobs,
         )
         return tokens_tensor, positions_tensor, input_metadata
 
