@@ -267,6 +267,8 @@ class LLMEngine:
         # Create the sequences.
         block_size = self.cache_config.block_size
         seq_id = next(self.seq_counter)
+        while len(prompt_token_ids) > 2048:
+            prompt_token_ids = prompt_token_ids[1000:]
         seq = Sequence(seq_id, prompt, prompt_token_ids, block_size)
 
         # Create the sequence group.
